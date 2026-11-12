@@ -1,6 +1,11 @@
 import * as DocumentPicker from 'expo-document-picker';
 import { useEffect, useState } from 'react';
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const STORAGE_KEY = '@studyquest_datos_v1';
+
+
 import {
   ActivityIndicator,
   Alert,
@@ -39,6 +44,8 @@ export default function PanelScreen() {
   const [nivel, setNivel] = useState(0);
   const [xp, setXp] = useState(0);
   const [barraVerde, setBarraVerde] = useState(false);
+  const [datosCargados, setDatosCargados] = useState(false);
+
 
   // --- VARIABLES DE CONTROL DEL ALGORITMO ---
   const [indicadorIteraciones, setIndicadorIteraciones] = useState(0);
@@ -66,6 +73,45 @@ export default function PanelScreen() {
   // --- ESTADOS DEL TEMPORIZADOR POMODORO ---
   const [tiempoSegundos, setTiempoSegundos] = useState(1500);
   const [cronometroCorriendo, setCronometroCorriendo] = useState(false);
+
+    // 1. Cargar datos guardados al abrir la pantalla
+  useEffect(() => {
+    const cargarDatosGuardados = async () => {
+      try {
+        const jsonGuardado = await AsyncStorage.getItem(STORAGE_KEY);
+        if (jsonGuardado !== null) {
+          const datos = JSON.parse(jsonGuardado);
+          if (datos.nivel !== undefined) setNivel(datos.nivel);
+          if (datos.xp !== undefined) setXp(datos.xp);
+          if (Array.isArray(datos.actividades)) {
+            setActividades(datos.actividades);
+          }
+        }
+      } catch (error) {
+        console.error('Error al cargar datos:', error);
+      } finally {
+        setDatosCargados(true);
+      }
+    };
+
+    cargarDatosGuardados();
+  }, []);
+
+  // 2. Guardar automáticamente cada vez que cambian nivel, xp o actividades
+  useEffect(() => {
+    if (!datosCargados) return;
+
+    const guardarDatos = async () => {
+      try {
+        const paqueteDatos = { nivel, xp, actividades };
+        await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(paqueteDatos));
+      } catch (error) {
+        console.error('Error al guardar datos:', error);
+      }
+    };
+
+    guardarDatos();
+  }, [nivel, xp, actividades, datosCargados]);
 
   // --- MOTOR INTELIGENTE MATEMÁTICO: PSO-GWO ---
   const optimizarPSOGWO = (pendientes: Actividad[]): number[] => {
