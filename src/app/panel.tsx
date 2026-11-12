@@ -1,9 +1,14 @@
 import * as DocumentPicker from 'expo-document-picker';
+import { router } from 'expo-router';
+import { signOut } from 'firebase/auth';
 import { useEffect, useState } from 'react';
+import { auth } from '../firebaseConfig';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const STORAGE_KEY = '@studyquest_datos_v1';
+const uidUsuario = auth.currentUser?.uid || 'invitado';
+const STORAGE_KEY = `@studyquest_datos_${uidUsuario}`;
+
 
 
 import {
@@ -45,6 +50,14 @@ export default function PanelScreen() {
   const [xp, setXp] = useState(0);
   const [barraVerde, setBarraVerde] = useState(false);
   const [datosCargados, setDatosCargados] = useState(false);
+  const cerrarSesion = async () => {
+    try {
+      await signOut(auth);
+      router.replace('/login');
+    } catch (error) {
+      Alert.alert('Error', 'No se pudo cerrar sesión.');
+    }
+  };
 
 
   // --- VARIABLES DE CONTROL DEL ALGORITMO ---
@@ -434,6 +447,20 @@ export default function PanelScreen() {
           <View style={styles.avatarSq}>
             <Text style={styles.avatarTexto}>SQ</Text>
           </View>
+          <TouchableOpacity
+            onPress={cerrarSesion}
+            style={{
+              marginLeft: 8,
+              backgroundColor: '#E0DCD8',
+              paddingVertical: 6,
+              paddingHorizontal: 10,
+              borderRadius: 15,
+            }}
+          >
+            <Text style={{ fontSize: 11, fontWeight: 'bold', color: '#3E2A1E' }}>
+              Salir
+            </Text>
+          </TouchableOpacity>
 
           <View>
             <Text style={styles.usuarioTitulo}>StudyQuest</Text>
