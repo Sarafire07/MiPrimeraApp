@@ -5,10 +5,29 @@ import { useEffect, useState } from 'react';
 import { auth } from '../firebaseConfig';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import DateTimePicker from '@react-native-community/datetimepicker';
+
+
+
 
 const uidUsuario = auth.currentUser?.uid || 'invitado';
 const STORAGE_KEY = `@studyquest_datos_${uidUsuario}`;
 
+let Notifications: any = null;
+try {
+  Notifications = require('expo-notifications');
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: true,
+      shouldPlaySound: true,
+      shouldSetBadge: true,
+      shouldShowBanner: true,
+      shouldShowList: true,
+    }),
+  });
+} catch (e) {
+  console.log('Notificaciones nativas desactivadas en Expo Go; funcionarán en el APK.');
+}
 
 
 import {
@@ -27,13 +46,17 @@ import {
 interface Actividad {
   id: string;
   titulo: string;
-  urgencia: number; // 0 a 100
-  complejidad: number; // 0 a 100
-  factorGrupal: number; // 0 o 100
-  bonoProductividad: number; // 0 a 100
-  tiempoEjecucion: number; // en horas
+  urgencia: number;
+  complejidad: number;
+  factorGrupal: number;
+  bonoProductividad: number;
+  tiempoEjecucion: number;
   completada: boolean;
+  fechaLimite?: string;
+  horaAviso?: string;
+  notificacionId?: string;
 }
+
 
 interface ResultadoPrioridad {
   id: string;
@@ -82,6 +105,17 @@ export default function PanelScreen() {
   const [esGrupal, setEsGrupal] = useState(false);
   const [bonoPreguntas, setBonoPreguntas] = useState(false);
   const [exitoVerde, setExitoVerde] = useState(false);
+    const [fechaEntrega, setFechaEntrega] = useState<Date>(
+    new Date(Date.now() + 24 * 60 * 60 * 1000) // Mañana por defecto
+  );
+  const [horaRecordatorio, setHoraRecordatorio] = useState<Date>(() => {
+    const d = new Date();
+    d.setHours(18, 0, 0, 0); // 18:00 por defecto
+    return d;
+  });
+  const [mostrarPickerFecha, setMostrarPickerFecha] = useState(false);
+  const [mostrarPickerHora, setMostrarPickerHora] = useState(false);
+
 
   // --- ESTADOS DEL TEMPORIZADOR POMODORO ---
   const [tiempoSegundos, setTiempoSegundos] = useState(1500);
@@ -109,6 +143,48 @@ export default function PanelScreen() {
 
     cargarDatosGuardados();
   }, []);
+    // --- NOTIFICACIÓN DIARIA A LAS 7:00 AM CON RECUENTO DE PENDIENTES ---
+  useEffect(() => {
+    if (!datosCargados) return;
+
+    const actualizarResumenDiario7AM = async () => {
+      try {
+        if (!Notifications) return;
+        const { status } = await Notifications.requestPermissionsAsync();
+        if (status !== 'granted') return;
+
+        // Cancelamos el resumen anterior de las 7 AM para actualizar el número
+        await Notifications.cancelScheduledNotificationAsync('resumen-diario-7am').catch(() => {});
+
+        const pendientes = actividades.filter((a) => !a.completada);
+        if (pendientes.length === 0) return;
+
+        const textoTareas =
+          pendientes.length === 1
+            ? 'tienes 1 tarea pendiente'
+            : `tienes ${pendientes.length} tareas pendientes`;
+
+        await Notifications.scheduleNotificationAsync({
+          identifier: 'resumen-diario-7am',
+          content: {
+            title: '☀️ Resumen StudyQuest (7:00 AM)',
+            body: `¡No olvides que ${textoTareas} por completar hoy!`,
+            sound: true,
+          },
+          trigger: {
+            type: Notifications.SchedulableTriggerInputTypes.DAILY,
+            hour: 7,
+            minute: 0,
+          },
+        });
+      } catch (e) {
+        console.error('Error configurando resumen 7 AM:', e);
+      }
+    };
+
+    actualizarResumenDiario7AM();
+  }, [actividades, datosCargados]);
+
 
   // 2. Guardar automáticamente cada vez que cambian nivel, xp o actividades
   useEffect(() => {
@@ -379,6 +455,50 @@ export default function PanelScreen() {
       Alert.alert("Error", "No se pudo abrir el explorador de archivos.");
     }
   };
+  const programarAvisoPersonalizado = async (
+    tituloTarea: string,
+    fechaObj: Date,
+    horaObj: Date
+  ): Promise<string | undefined> => {
+    try {
+      if (!Notifications) return undefined;
+      const { status } = await Notifications.requestPermissionsAsync();
+      if (status !== 'granted') return undefined;
+
+      // Combinamos la fecha elegida con la hora exacta de aviso elegida
+      const fechaHoraExacta = new Date(
+        fechaObj.getFullYear(),
+        fechaObj.getMonth(),
+        fechaObj.getDate(),
+        horaObj.getHours(),
+        horaObj.getMinutes(),
+        0
+      );
+
+      // Si la hora elegida ya pasó hoy, avisamos en 10 segundos para que no falle
+      const disparador =
+        fechaHoraExacta.getTime() <= Date.now()
+          ? new Date(Date.now() + 10 * 1000)
+          : fechaHoraExacta;
+
+      const idNotif = await Notifications.scheduleNotificationAsync({
+        content: {
+          title: '⏰ ¡Recordatorio de Misión!',
+          body: `No olvides tu actividad: "${tituloTarea}".`,
+          sound: true,
+        },
+        trigger: {
+          type: Notifications.SchedulableTriggerInputTypes.DATE,
+          date: disparador,
+        },
+      });
+
+      return idNotif;
+    } catch (e) {
+      console.error('Error programando aviso:', e);
+      return undefined;
+    }
+  };
 
   // --- FLUJO B: REGISTRAR TAREA MANUAL ---
   const registrarTareaManual = () => {
@@ -389,7 +509,18 @@ export default function PanelScreen() {
 
     setExitoVerde(true);
 
-    setTimeout(() => {
+        setTimeout(async () => {
+      const fechaTxt = fechaEntrega.toLocaleDateString();
+      const horaTxt = horaRecordatorio.toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+      const idNotif = await programarAvisoPersonalizado(
+        nombreActividad,
+        fechaEntrega,
+        horaRecordatorio
+      );
+
       const nuevaAct: Actividad = {
         id: `M${actividades.length + 1}`,
         titulo: nombreActividad,
@@ -399,6 +530,9 @@ export default function PanelScreen() {
         bonoProductividad: bonoPreguntas ? 80 : 20,
         tiempoEjecucion: parseFloat(tiempoExec) || 4,
         completada: false,
+        fechaLimite: fechaTxt,
+        horaAviso: horaTxt,
+        notificacionId: idNotif,
       };
 
       setActividades((prev) => [...prev, nuevaAct]);
@@ -406,10 +540,16 @@ export default function PanelScreen() {
       setExitoVerde(false);
       setPestañaActiva('misiones');
     }, 1000);
+
   };
 
   // --- FLUJO C: COMPLETAR MISIÓN ---
   const completarMision = (id: string, puntosGanados: number) => {
+      const tareaCompletada = actividades.find((a) => a.id === id);
+      if (Notifications && tareaCompletada?.notificacionId) {
+        Notifications.cancelScheduledNotificationAsync(tareaCompletada.notificacionId).catch(() => {});
+    }
+
     setBarraVerde(true);
 
     setXp((prevXp) => {
@@ -580,6 +720,14 @@ export default function PanelScreen() {
                           🚨 Urgencia: {item.actividad.urgencia}
                         </Text>
                       </View>
+                                            {item.actividad.fechaLimite && (
+                        <View style={styles.tag}>
+                          <Text style={styles.tagTexto}>
+                            📅 {item.actividad.fechaLimite} • ⏰ Aviso: {item.actividad.horaAviso}
+                          </Text>
+                        </View>
+                      )}
+
 
                       <View style={styles.tag}>
                         <Text style={styles.tagTexto}>
@@ -700,6 +848,57 @@ export default function PanelScreen() {
               value={tiempoExec} 
               onChangeText={setTiempoExec} // Modifica las horas estimadas de trabajo
             />
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 }}>
+              <View style={{ width: '48%' }}>
+                <Text style={styles.labelForm}>FECHA DE ENTREGA</Text>
+                <TouchableOpacity
+                  style={styles.inputForm}
+                  onPress={() => setMostrarPickerFecha(true)}
+                >
+                  <Text style={{ color: '#3E2A1E', fontWeight: 'bold' }}>
+                    📅 {fechaEntrega.toLocaleDateString()}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={{ width: '48%' }}>
+                <Text style={styles.labelForm}>HORA DE AVISO</Text>
+                <TouchableOpacity
+                  style={styles.inputForm}
+                  onPress={() => setMostrarPickerHora(true)}
+                >
+                  <Text style={{ color: '#3E2A1E', fontWeight: 'bold' }}>
+                    ⏰ {horaRecordatorio.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {mostrarPickerFecha && (
+              <DateTimePicker
+                value={fechaEntrega}
+                mode="date"
+                display="default"
+                minimumDate={new Date()}
+                onChange={(event, selectedDate) => {
+                  setMostrarPickerFecha(false);
+                  if (selectedDate) setFechaEntrega(selectedDate);
+                }}
+              />
+            )}
+
+            {mostrarPickerHora && (
+              <DateTimePicker
+                value={horaRecordatorio}
+                mode="time"
+                display="default"
+                onChange={(event, selectedTime) => {
+                  setMostrarPickerHora(false);
+                  if (selectedTime) setHoraRecordatorio(selectedTime);
+                }}
+              />
+            )}
+
 
             {/* Switch de Proyecto Grupal */}
             <View style={styles.filaSwitch}>
